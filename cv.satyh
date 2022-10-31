@@ -1,0 +1,398 @@
+@require: math
+@require: code
+
+type gender = Male | Female | Nothing
+
+module CV : sig
+    type config
+    val document : config ?-> block-text -> document
+
+    direct +title : [inline-text?; (context -> context) ?; inline-text] block-cmd
+
+    % 左右上下
+    direct +pic-on-right : [string ?; block-text ] block-cmd
+    direct +name-gender-birthday-box : [gender; block-text; block-text; block-text] block-cmd
+    direct +address-tel-email-box : [block-text; block-text; block-text; block-text] block-cmd
+
+
+    % direct +hr : block-cmd
+    % direct \uline : [inline-text] inline-cmd
+    % direct \br : inline-cmd
+    % direct \bf : [inline-text] inline-cmd
+    direct +p : [inline-text] block-cmd
+    direct +fontsize : [length; block-text] block-cmd
+    direct \fontsize : [length; inline-text] inline-cmd
+    direct \noindent : [] inline-cmd
+    direct +centering : [inline-text] block-cmd
+    direct +flushright : [inline-text] block-cmd
+end = struct
+    let font-ratio-latin = 1.
+    let font-ratio-cjk = 0.88
+
+    let font-latin-roman  = (`Junicode`   , font-ratio-latin, 0.)
+    let font-latin-italic = (`Junicode-it`, font-ratio-latin, 0.)
+    let font-latin-bold   = (`Junicode-b` , font-ratio-latin, 0.)
+    let font-latin-sans   = (`lmsans`    , font-ratio-latin, 0.)
+    let font-latin-mono   = (`lmmono`    , font-ratio-latin, 0.)
+    let font-cjk-mincho   = (`ipaexm`    , font-ratio-cjk  , 0.)
+    let font-cjk-gothic   = (`ipaexg`    , font-ratio-cjk  , 0.)
+
+    let get-standard-context wid =
+        get-initial-context wid (command \math)
+            |> set-code-text-command (command \code)
+            |> set-dominant-wide-script Kana
+            |> set-language Kana Japanese
+            |> set-language HanIdeographic Japanese
+            |> set-dominant-narrow-script Latin
+            |> set-language Latin English
+            |> set-math-font `lmodern`
+            |> set-hyphen-penalty 100
+
+    type config = (|
+        padding-inner:     length;
+        padding-outer:     length;
+        padding-top:       length;
+        padding-bottom:    length;
+        papersize:         page;
+        lineweight-thick:  length;
+        lineweight-normal: length;
+        lineweight-thin:   length;
+        fontsize:          length;
+        fontsize-title:    length;
+        fontsize-aside:    length;
+        fontsize-narrow:   length;
+        font-kana:            string * float * float;
+        font-han-ideographic: string * float * float;
+        font-latin:           string * float * float;
+        font-kana-gothic:     string * float * float;
+        font-han-ideographic-gothic: string * float * float;
+        font-latin-gothic:    string * float * float;
+        picture-size:     length * length;
+        picture-margin:   length * length * length * length;
+        picture-guideline-inset: length;
+        label-margin: length;
+        default-box-height:  length;
+        default-line-height: length;
+        show-ruled-line: bool;
+    |)
+    
+
+    let default-config = (|
+        padding-inner     = 18.13mm;
+        padding-outer     = 21.73mm;
+        padding-top       = 25.3mm;
+        padding-bottom    = 12.5mm;
+        papersize         = A4Paper;
+        lineweight-thick  = 0.68mm;
+        lineweight-normal = 0.34mm;
+        lineweight-thin   = 0.04mm;
+        fontsize          = 4.5mm;
+        fontsize-title    = 3.5mm; % 表のヘッダ、氏名、生年月日など
+        fontsize-aside    = 3.2mm;  % 現住所など
+        fontsize-narrow   = 2.3mm; % ふりがな
+        font-kana            = font-cjk-mincho;
+        font-han-ideographic = font-cjk-mincho;
+        font-latin           = font-latin-roman;
+        font-kana-gothic            = font-cjk-gothic;
+        font-han-ideographic-gothic = font-cjk-gothic;
+        font-latin-gothic           = font-latin-bold;
+        picture-size   = (3cm, 4cm);
+        picture-margin = (5mm, 7mm, -6mm, 2mm);
+        picture-guideline-inset = 3mm;
+        label-margin = 1.7mm;
+        default-box-height = 25mm;
+        default-line-height = 8mm;
+        show-ruled-line = true;
+    |)
+
+    let-mutable conf <- default-config
+    let-mutable reserved-height <- None
+
+    let set-context-font is-gothic ctx =
+        if is-gothic then
+            ctx
+            |> set-font Kana           ((!conf)#font-kana-gothic)
+            |> set-font HanIdeographic ((!conf)#font-han-ideographic-gothic)
+            |> set-font Latin          ((!conf)#font-latin-gothic)
+        else
+            ctx
+            |> set-font Kana           ((!conf)#font-kana)
+            |> set-font HanIdeographic ((!conf)#font-han-ideographic)
+            |> set-font Latin          ((!conf)#font-latin)
+
+    % values are from https://github.com/johnwhitington/camlpdf/blob/fd56554adb16ad03f84ad70a721e01a11092a836/pdfpaper.ml
+    let page-to-size pg =
+        match pg with
+            | A0Paper                -> (841mm,1189mm)
+            | A1Paper                -> (594mm, 841mm)
+            | A2Paper                -> (420mm, 594mm)
+            | A3Paper                -> (297mm, 420mm)
+            | A4Paper                -> (210mm, 297mm)
+            | A5Paper                -> (148mm, 210mm)
+            | USLetter               -> (8.5inch, 11inch)
+            | USLegal                -> (8.5inch, 14inch)
+            | UserDefinedPaper(w, h) -> (w, h)
+
+    let get-default-height =
+        match !reserved-height with
+        | Some(h) -> (
+              let () = reserved-height <- None in
+              h
+        )
+        | None -> (!conf)#default-box-height
+
+    let labelled-box ctx fontsize-label minimal-height it-label bt-content =
+        let ctx-label = set-font-size fontsize-label ctx in
+        let w = get-text-width ctx in
+        let ib-label = read-inline ctx-label it-label in
+        let (w-label, h-label, d-label) = get-natural-metrics ib-label in
+        let margin = (!conf)#label-margin in
+        let wid = w -' w-label -' margin -' margin in
+        let ib-content = embed-block-top ctx wid (fun ctx -> read-block ctx bt-content) in
+        let (w-content, h-content, d-content) = get-natural-metrics ib-content in
+        let h = if h-content >' minimal-height then h-content else minimal-height in
+        let ib = inline-graphics w h 0pt (fun(x, y) -> [
+            draw-text (x +' margin, y +' (h -' h-label +' d-label) *' 0.5) ib-label;
+            draw-text (x +' w -' wid, y +' (h -' h-content +' d-content) *' 0.5) ib-content;
+        ]) in
+        line-break true true ctx ib
+
+    let enclose-bt ctx t f =
+        block-frame-breakable ctx (0pt, 0pt, 0pt, 0pt) (
+            let strokef = stroke t (Color.black) in
+            let line-l (x, y, w, h) = strokef (Gr.line (x, y) (x, y +' h)) in
+            let line-r (x, y, w, h) = strokef (Gr.line (x +' w, y) (x +' w, y +' h)) in
+            let line-t (x, y, w, h) = strokef (Gr.line (x, y +' h) (x +' w, y +' h)) in
+            let line-b (x, y, w, h) = strokef (Gr.line (x, y) (x +' w, y)) in
+            let decoS (x, y) w h _ = List.map (fun f -> f (x, y, w, h)) [line-l; line-r; line-t; line-b] in
+            let decoH (x, y) w h _ = List.map (fun f -> f (x, y, w, h)) [line-l; line-r; line-t] in
+            let decoM (x, y) w h _ = List.map (fun f -> f (x, y, w, h)) [line-l; line-r] in
+            let decoT (x, y) w h _ = List.map (fun f -> f (x, y, w, h)) [line-l; line-r; line-b] in
+            (decoS, decoH, decoM, decoT)
+        ) f
+
+    let-block ctx +title ?:it-title ?:title-func it-date =
+        let title-func = title-func
+            |> Option.from (fun ctx -> (set-font-size 7.47mm ctx |> set-context-font true))
+        in
+        let it-title = Option.from {履　歴　書} it-title in
+        let ib-title = read-inline (title-func ctx) it-title in
+        let ib-date = read-inline (ctx |> set-context-font false |> set-font-size ((!conf)#fontsize-narrow)) it-date in
+        let (_, h-title, d-title) = get-natural-metrics ib-title in
+        let (w-date, h-date, d-date) = get-natural-metrics ib-date in
+        let w = get-text-width ctx in
+        let ib = inline-graphics w 0pt 0pt (fun(x, y) -> ([
+            draw-text (x, y +' h-title +' d-title) ib-title;
+            draw-text (x +' w -' w-date, y +' h-date +' d-date) ib-date;
+        ])) in
+        line-break true false ctx ib
+
+    let circled-text ctx flag it =
+        let ib = read-inline ctx it in
+        let (w, h, d) = get-natural-metrics ib in
+        let dia = if w >' (h +' d) then w else h +' d in
+        inline-graphics w h d (fun(x, y) -> 
+            (
+                if flag then [draw-text (x, y) ib] else [
+                    draw-text (x, y) ib;
+                    stroke 2pt (Color.black) (Gr.circle (x +' (w *' 0.5), y +' (h -' d) *' 0.5) dia);
+                ]
+            )
+        )
+
+    let box-with-aside ctx wid b f1 f2 =
+        let w = get-text-width ctx in
+        let ib1 = embed-block-top ctx (w -' wid) f1 in
+        let ib2 = embed-block-top ctx (wid) f2 in
+        let (w1, h1, d1) = get-natural-metrics ib1 in
+        let (w2, h2, d2) = get-natural-metrics ib2 in
+        let h = if h1 +' d1 >' h2 +' d2 then h1 +' d1 else h2 +' d2 in
+        let ib = inline-graphics w h 0pt (fun (x, y) -> [
+            draw-text (x +' (w -' wid -' w1) *' 0.5, y +' (h -' h1 +' d1) *' 0.5) ib1;
+            draw-text (x +' w -' (wid +' w2) *' 0.5, y +' (h -' h2 +' d2) *' 0.5) ib2;
+            stroke b (Color.black) (Gr.line (x +' w -' wid, y) (x +' w -' wid, y +' h));
+        ]) in
+        line-break true true ctx ib
+
+    let-block ctx +name-gender-birthday-box gend bt-ruby bt-name bt-birth =
+        let h = get-default-height in
+        let h-line = ((!conf)#default-line-height) in
+        let h-name = h -' h-line *' 2.0 in
+        enclose-bt ctx ((!conf)#lineweight-normal) (fun ctx -> (
+            let box-ruby ctx = enclose-bt ctx ((!conf)#lineweight-thin) (fun ctx -> (
+                labelled-box ctx ((!conf)#fontsize-narrow) h-line {ふりがな} bt-ruby
+            )) in
+            let box-content ctx = labelled-box ctx ((!conf)#fontsize-title) h-name {氏　　名} bt-name in
+            let aside-ib flag ctx = (
+                let l-male = circled-text ctx flag {男} in
+                let l-female = circled-text ctx (not flag) {女} in
+                let l-spacer = read-inline ctx {　・　} in
+                l-male ++ l-spacer ++ l-female
+            ) in
+            let aside-w = (
+                let (w, _, _) = get-natural-metrics (aside-ib true ctx) in
+                w +' ((!conf)#label-margin) *' 4.0
+            ) in
+            let aside-fn flag ctx = (
+                let ib = aside-ib flag ctx in
+                let (w, h, d) = get-natural-metrics ib in
+                let ib = inline-graphics aside-w (h-name +' h-line) 0pt (fun (x, y) -> [
+                    draw-text (x +' (aside-w -' w) *' 0.5, y +' (h-line +' h-name +' d -' h) *' 0.5) ib
+                ]) in
+                line-break true true ctx ib
+            ) in
+            let box-left = match gend with
+                | Nothing -> (box-ruby ctx) +++ (box-content ctx)
+                | Male -> (box-with-aside ctx aside-w ((!conf)#lineweight-thin)
+                      (fun ctx -> ((box-ruby ctx) +++ (box-content ctx)))
+                          (aside-fn true)
+                )
+                | Female -> (box-with-aside ctx aside-w ((!conf)#lineweight-thin)
+                      (fun ctx -> ((box-ruby ctx) +++ (box-content ctx)))
+                          (aside-fn false)
+                )
+            in
+            let box-birth = enclose-bt ctx ((!conf)#lineweight-thin) (fun ctx -> (
+                labelled-box ctx ((!conf)#fontsize-narrow) h-line {生年月日} bt-birth
+            )) in
+            box-left +++ box-birth
+        ))
+
+    let-block ctx +address-tel-email-box bt-ruby bt-address bt-tel bt-email =
+        let h = get-default-height in
+        let h-ruby = ((!conf)#default-line-height) in
+        let h-address = h -' h-ruby in
+        enclose-bt ctx ((!conf)#lineweight-normal) (fun ctx -> (
+            let box-ruby = enclose-bt ctx ((!conf)#lineweight-thin) (fun ctx -> (
+                labelled-box ctx ((!conf)#fontsize-narrow) h-ruby {ふりがな} bt-ruby
+            )) in
+            let box-content = read-block ctx bt-address in
+            box-ruby +++ box-content
+        ))
+
+    let ends-with str needle =
+        let l-str = string-length str in
+        let l-needle = string-length needle in
+        if l-str > l-str then
+            false
+        else
+            let sub = string-sub str (l-str - l-needle) l-needle in
+            string-same sub needle
+
+    let-block ctx +pic-on-right ?:fname bt =
+        let (size-w, size-h) = (!conf)#picture-size in
+        let (mg-l, mg-r, mg-t, mg-b) = (!conf)#picture-margin in
+        let inset = (!conf)#picture-guideline-inset in
+        let text-width = get-text-width ctx in
+        let w = size-w +' mg-l +' mg-r in
+        let h = size-h +' mg-t +' mg-b in
+        let ib = inline-graphics w h 0pt (fun(x, y) -> (
+            match fname with
+            | Some(fname) -> (
+                let img = if ends-with fname `.pdf` then
+                    load-pdf-image fname 1
+                else
+                    load-image fname
+                in
+                let test-w = 1cm in
+                let test-ib = use-image-by-width img test-w in
+                let (_, test-h, _) = get-natural-metrics test-ib in
+                let r1 = size-h /' size-w in
+                let r2 = test-h /' test-w in
+                let (img-x, img-y, img-w) = if 1pt *' r1 >' 1pt *' r2 then
+                    let hh = size-w *' r2 in
+                    (0pt, (size-h -' hh) *' 0.5 , size-w)
+                else
+                    let ww = size-h *' (1.0 /. r2) in
+                    ((size-w -' ww) *' 0.5, 0pt, ww)
+                in
+                let ib = use-image-by-width img img-w in
+                [draw-text (x +' mg-l +' img-x, y +' h -' mg-t -' img-y) ib]
+            )
+            | None -> 
+                  (
+                      let msg1 = embed-string (show-float (size-w /' 1mm)) in
+                      let msg2 = embed-string (show-float (size-h /' 1mm)) in
+                      let it-msg = {#msg1;mm${\times}#msg2;mm} in
+                      let ib-msg = read-inline ctx it-msg in
+                      let (msg-w, msg-h, msg-d) = get-natural-metrics ib-msg in
+                      [
+                          Gr.rectangle (x +' mg-l +' inset, y +' mg-b +' inset) (x +' w -' mg-r, y +' h -' mg-t)
+                              |> stroke 0.5pt (Color.black);
+                        draw-text (x +' (w -' msg-w) *' 0.5, y +' (h +' msg-h +' msg-d) *' 0.5) ib-msg;
+                      ]
+                  )
+        )) in
+        let ib1 = embed-block-bottom ctx (text-width -' w) (fun ctx -> (
+            let () = reserved-height <- Some(h) in
+            read-block ctx bt
+        )) in
+        line-break true true ctx (ib1 ++ ib)
+
+    let document ?:config bt =
+        let () = match config with
+            | Some(c) -> conf <- c
+            | None -> ()
+        in
+        let (w-page, h-page) = page-to-size ((!conf)#papersize) in
+        let w = w-page -' (!conf)#padding-inner -' (!conf)#padding-outer in
+        let h = h-page -' (!conf)#padding-top -' (!conf)#padding-bottom in
+        let ctx = get-standard-context w in
+        % let ib1 = inline-graphics w h 0cm (fun(x, y) -> (
+        %     [stroke b-thick color (
+        %         start-path (18.16mm, h -' 24.85mm)
+        %             |> line-to ( 18.16mm, h -' 284.69mm)
+        %             |> line-to (184.72mm, h -' 284.69mm)
+        %             |> line-to (184.72mm, h -' 59.06mm)
+        %             |> line-to (143.78mm, h -' 58.39mm)
+        %             |> line-to (143.78mm, h -' 25.53mm)
+        %             |> close-with-line
+        %     );
+        %     draw-text (19.482mm, h -' 22.538mm) ib-title;]
+        % )) in
+        let bb = read-block ctx bt in
+        page-break ((!conf)#papersize)
+            (fun (r) -> ( (| 
+                text-height = h;
+                text-origin = (
+                    if r#page-number mod 2 == 1 then
+                        (!conf)#padding-outer
+                    else
+                        (!conf)#padding-inner
+                , (!conf)#padding-top);
+            |) ))
+            (fun (_) -> (|header-content = block-nil; header-origin = (0cm, 0cm); footer-content = block-nil; footer-origin = (0cm, 0cm); |))
+            bb
+
+    let quad-indent ctx =
+        inline-skip (get-font-size ctx *' font-ratio-cjk)
+
+    let-mutable is-noindent <- false
+
+    let-block ctx +p it =
+        let ib = read-inline ctx it in
+        let ib = (if (!is-noindent) then inline-nil else quad-indent ctx) ++ ib ++ inline-fil in
+        let () = is-noindent <- false in
+        form-paragraph ctx ib
+
+    let-inline ctx \noindent = let () = is-noindent <- true in inline-nil
+
+    let-block ctx +centering it =
+        line-break true true ctx (inline-fil ++ read-inline ctx it ++ inline-fil)
+
+    let-block ctx +flushright it =
+        line-break true true ctx (inline-fil ++ read-inline ctx it)
+
+    let-block ctx +fontsize size bt =
+        let ctx =
+            set-font-size size ctx
+        in
+        read-block ctx bt
+
+    let-inline ctx \fontsize size it =
+        let ctx =
+            set-font-size size ctx
+        in
+        read-inline ctx it
+
+end

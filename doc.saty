@@ -1,0 +1,27 @@
+@import: cv
+
+CV.document '<
+    % 写真を指定する場合  +pic-on-right ?:(`mypic.jpg`) < ... >
+    % 指定できるのは *.pdf, *.jpg のみ
+    +pic-on-right <
+        +title {1970 年 1 月 1 日現在}
+        +name-gender-birthday-box (Male) <
+            +centering {やまだ　たろう}
+        > <
+            +fontsize (24pt) <
+                +centering{山田　太郎}
+            >
+        > <
+            +flushright{1970 年　1 月　1 日生　(満 20 歳) }
+        >
+    >
+    +address-tel-email-box <
+        +p {ふりがな}
+    > <
+        +p {郵便番号}
+    > <
+        +p {0120-345-678}
+    > <
+        +p {abc\@example.com}
+    >
+>

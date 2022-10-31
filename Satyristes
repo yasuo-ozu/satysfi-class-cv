@@ -1,0 +1,40 @@
+;; For Satyrographos 0.0.2 series
+(version 0.0.2)
+
+(library
+  (name "class-cv")
+  (version "0.0.1")
+  (sources
+    (
+     (package "cv.satyh" "./cv.satyh")
+    )
+  )
+  (opam "satysfi-class-cv.opam")
+  (dependencies
+    ()
+  )
+  (compatibility ())
+)
+
+(libraryDoc
+  (name "class-cv-doc")
+  (version "0.0.1")
+  (workingDirectory "./")
+  (build
+    (
+      (satysfi "doc.saty" "-o" "doc.pdf")
+    )
+  )
+  (sources
+    (
+      (doc "doc.pdf" "./doc.pdf")
+    )
+  )
+  (opam "satysfi-class-cv-doc.opam")
+  (dependencies
+    (
+    )
+  )
+)
+
+;; vim: set expandtab ts=2 :
